@@ -1,0 +1,20 @@
+# Ignore runtime logs and build artifacts
+blockchain.log
+blockchain.log.*
+
+# Binaries produced by build/run
+blockchain-app
+blockchain-app.exe
+
+# Go-related
+vendor/
+bin/
+*.exe
+*.test
+*.out
+
+# OS artifacts
+.DS_Store
+
+# Env files (if present)
+.env
