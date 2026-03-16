@@ -1,0 +1,349 @@
+openapi: 3.0.3
+info:
+  title: Go-PoS Blockchain API
+  version: 1.0.0
+  description: API contract for frontend integration with the Go-based PoS-inspired blockchain backend.
+servers:
+  - url: http://localhost:8080
+    description: Default development server (port 8080)
+  - url: http://localhost:8081
+    description: Alternate development server (port 8081)
+paths:
+  /wallets:
+    post:
+      summary: Create a new wallet
+      operationId: createWallet
+      requestBody:
+        description: Optional wallet metadata
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label:
+                  type: string
+      responses:
+        '200':
+          description: Wallet created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WalletResponse'
+        '400':
+          description: Bad request
+      example:
+        address: "0x1234567890abcdef1234567890abcdef12345678"
+        publicKey: "abcdef1234567890abcdef..."
+  /wallets/{address}/balance:
+    get:
+      summary: Get balance and nonce for a wallet
+      parameters:
+        - name: address
+          in: path
+          required: true
+          description: Wallet address
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Wallet balance and nonce
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WalletBalance'
+        '404':
+          description: Wallet not found
+  /blocks:
+    get:
+      summary: List blocks with transactions
+      responses:
+        '200':
+          description: Array of blocks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Block'
+  /blocks/{hash}:
+    get:
+      summary: Get a block by hash
+      parameters:
+        - name: hash
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Block
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Block'
+        '404':
+          description: Block not found
+  /blocks/latest:
+    get:
+      summary: Get the latest block
+      responses:
+        '200':
+          description: Latest block
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Block'
+  /transactions:
+    post:
+      summary: Submit a new transaction
+      requestBody:
+        description: Transaction including signature
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransactionRequest'
+      responses:
+        '200':
+          description: Transaction accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionResponse'
+        '400':
+          description: Invalid transaction
+        '404':
+          description: Unknown sender address
+  /transactions/raw:
+    post:
+      summary: Submit a pre-signed transaction (raw)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransactionRequest'
+      responses:
+        '200':
+          description: Transaction accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionResponse'
+  /validators:
+    get:
+      summary: Get current validators and their stakes
+      responses:
+        '200':
+          description: Validators and stakes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidatorList'
+  /validator/register:
+    post:
+      summary: Register a new validator with a stake
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ValidatorRegister'
+      responses:
+        '200':
+          description: Registration acknowledged
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidatorResponse'
+  /validator/unregister:
+    post:
+      summary: Unregister a validator
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                address:
+                  type: string
+      responses:
+        '200':
+          description: Unregistered
+  /health:
+    get:
+      summary: Health check
+      responses:
+        '200':
+          description: Node health
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+  /dashboard:
+    get:
+      summary: Dashboard data (summary view)
+      responses:
+        '200':
+          description: Dashboard data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  blockHeight:
+                    type: integer
+                  totalSupply:
+                    type: integer
+                  lastBlockHash:
+                    type: string
+                  walletCount:
+                    type: integer
+                  validatorCount:
+                    type: integer
+                  recentTransactions:
+                    type: array
+                    items:
+                      type: object
+components:
+  schemas:
+    WalletResponse:
+      type: object
+      properties:
+        address:
+          type: string
+        publicKey:
+          type: string
+      required:
+        - address
+        - publicKey
+    WalletBalance:
+      type: object
+      properties:
+        address:
+          type: string
+        balance:
+          type: integer
+        nonce:
+          type: integer
+      required:
+        - address
+        - balance
+        - nonce
+    Block:
+      type: object
+      properties:
+        hash:
+          type: string
+        timestamp:
+          type: integer
+        prevBlockHash:
+          type: string
+        validator:
+          type: string
+        transactions:
+          type: array
+          items:
+            $ref: '#/components/schemas/TransactionSimple'
+      required:
+        - hash
+        - timestamp
+        - prevBlockHash
+        - validator
+        - transactions
+    TransactionSimple:
+      type: object
+      properties:
+        id:
+          type: string
+        from:
+          type: string
+        to:
+          type: string
+        amount:
+          type: integer
+        nonce:
+          type: integer
+        fee:
+          type: integer
+        payload:
+          type: string
+      required:
+        - id
+        - from
+        - to
+        - amount
+        - nonce
+        - fee
+        - payload
+    TransactionRequest:
+      type: object
+      properties:
+        from:
+          type: string
+        to:
+          type: string
+        amount:
+          type: integer
+        nonce:
+          type: integer
+        fee:
+          type: integer
+        payload:
+          type: string
+        sig:
+          type: string
+      required:
+        - from
+        - to
+        - amount
+        - nonce
+        - fee
+        - sig
+    TransactionResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        txId:
+          type: string
+      required:
+        - status
+        - txId
+    ValidatorList:
+      type: object
+      properties:
+        validators:
+          type: object
+          additionalProperties:
+            type: integer
+      required:
+        - validators
+    ValidatorRegister:
+      type: object
+      properties:
+        address:
+          type: string
+        stake:
+          type: integer
+      required:
+        - address
+        - stake
+    ValidatorResponse:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+    Health:
+      type: object
+      properties:
+        uptime:
+          type: string
+        version:
+          type: string
+        blockHeight:
+          type: integer
