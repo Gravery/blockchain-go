@@ -39,7 +39,12 @@ if ! wait_for_node; then
   exit 1
 fi
 
-echo "[Test] Basic API checks. You can adjust endpoints as needed."
+echo "[Test] Seeding sample data for frontend demo"
+echo "Calling /seed on port ${PORT}..."
+cURL_SEED=$(curl -s http://localhost:${PORT}/seed || true)
+echo "Seed response: ${cURL_SEED}"
+
+echo "[Test] Basic API checks. You can adjust endpoints as needed." 
 curl -s http://localhost:8080/blocks | head -n 5 || true
 
 echo "[Test] End-to-end quick test: create wallet, send a tx, check blocks"
@@ -52,8 +57,21 @@ if [ -z "$WALLET" ]; then
   exit 1
 fi
 echo "Wallet: ${WALLET}"
-TX=$(curl -s -X POST http://localhost:8080/transactions -H "Content-Type: application/json" -d '{"to":"'$WALLET'","amount":1,"payload":"test"}')
+TX=$(curl -s -X POST http://localhost:${PORT}/transactions -H "Content-Type: application/json" -d '{"to":"'$WALLET'","amount":1,"payload":"test"}')
 echo "TX response: ${TX}"
+
+echo "[Test] Extended flow: register a validator and check dashboard"
+VADDR_JSON=$(curl -s -X POST http://localhost:${PORT}/wallets -H "Content-Type: application/json" -d '{}')
+VADDR=$(echo "$VADDR_JSON" | sed -n 's/.*"address"\s*:\s*"\([^"}]*\)".*/\1/p')
+if [ -n "$VADDR" ]; then
+  REG_REQ='{"address":"'$VADDR'","stake":50}'
+  curl -s -X POST http://localhost:${PORT}/validator/register -H "Content-Type: application/json" -d "$REG_REQ" >/dev/null || true
+  curl -s http://localhost:${PORT}/validators | head -n 5 || true
+fi
+
+echo "[Test] Dashboard and blocks"
+curl -s http://localhost:${PORT}/dashboard | head -n 20 || true
+curl -s http://localhost:${PORT}/blocks | head -n 5 || true
 
 echo "Waiting for block to be forged..."
 sleep 15

@@ -4,6 +4,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	mathrand "math/rand"
 	"net/http"
 	"os"
 	"strings"
@@ -16,6 +17,19 @@ import (
 	"github.com/gravery/go-pos-blockchain/internal/core"
 	"github.com/gravery/go-pos-blockchain/internal/wallet"
 )
+
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 func init() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
@@ -30,12 +44,23 @@ func main() {
 
 	go node.runBlockProduction(10 * time.Second)
 
-	http.HandleFunc("/blocks", node.handleGetBlocks)
-	http.HandleFunc("/transactions", node.handleAddTransaction)
-	http.HandleFunc("/wallets", node.handleCreateWallet)
-	http.HandleFunc("/wallets/", node.handleGetBalance)
+	http.Handle("/blocks", withCORS(http.HandlerFunc(node.handleGetBlocks)))
+	http.Handle("/transactions", withCORS(http.HandlerFunc(node.handleAddTransaction)))
+	http.Handle("/wallets", withCORS(http.HandlerFunc(node.handleCreateWallet)))
+	http.Handle("/wallets/", withCORS(http.HandlerFunc(node.handleGetBalance)))
+	http.Handle("/validators", withCORS(http.HandlerFunc(node.handleGetValidators)))
+	http.Handle("/validator/register", withCORS(http.HandlerFunc(node.handleRegisterValidator)))
+	http.Handle("/validator/unregister", withCORS(http.HandlerFunc(node.handleUnregisterValidator)))
+	http.Handle("/dashboard", withCORS(http.HandlerFunc(node.handleDashboard)))
+	http.Handle("/health", withCORS(http.HandlerFunc(node.handleHealth)))
+	http.Handle("/blocks/latest", withCORS(http.HandlerFunc(node.handleGetBlockByHash)))
+	http.Handle("/blocks/", withCORS(http.HandlerFunc(node.handleGetBlockByHash)))
+	http.Handle("/seed", withCORS(http.HandlerFunc(node.handleSeedData)))
 
-	port := "8080"
+	port := os.Getenv("BLOCKCHAIN_API_PORT")
+	if port == "" {
+		port = "8080"
+	}
 	log.Info().Str("port", port).Msg("Starting HTTP API server...")
 
 	if err := http.ListenAndServe(":"+port, nil); err != nil {
@@ -47,6 +72,195 @@ type Node struct {
 	Blockchain *core.Blockchain
 	Mempool    *core.Mempool
 	Wallet     *wallet.Wallet
+}
+
+func (n *Node) handleSeedData(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	bc := n.Blockchain
+	if bc == nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	wa, err := wallet.NewWallet()
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	wb, err := wallet.NewWallet()
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	bc.AddPublicKey(wa.GetAddress(), wa.PublicKey)
+	bc.AddPublicKey(wb.GetAddress(), wb.PublicKey)
+	bc.Balances[wa.GetAddress()] = 100
+	bc.Balances[wb.GetAddress()] = 0
+	bc.Nonces[wa.GetAddress()] = 0
+	bc.Nonces[wb.GetAddress()] = 0
+
+	additional, _ := wallet.NewWallet()
+	bc.AddPublicKey(additional.GetAddress(), additional.PublicKey)
+	bc.Balances[additional.GetAddress()] = int64(5 + mathrand.Intn(20))
+	bc.Nonces[additional.GetAddress()] = 0
+	seedTx := &core.Transaction{
+		ID:      []byte("seed_tx"),
+		From:    wa.GetAddress(),
+		To:      additional.GetAddress(),
+		Amount:  5,
+		Nonce:   0,
+		Fee:     1,
+		Payload: []byte("seed transfer"),
+	}
+	sig, err := wa.Sign(seedTx.HashTx())
+	if err == nil {
+		seedTx.Sig = sig
+		block := core.NewBlock([]*core.Transaction{seedTx}, bc.GetLastBlock().Hash, wa.GetAddress())
+		_ = bc.AddBlock(block)
+	}
+
+	resp := map[string]interface{}{
+		"walletA": map[string]string{
+			"address":   wa.GetAddress(),
+			"publicKey": fmt.Sprintf("0x%x", wa.PublicKey),
+		},
+		"walletB": map[string]string{
+			"address":   wb.GetAddress(),
+			"publicKey": fmt.Sprintf("0x%x", wb.PublicKey),
+		},
+		"balances": bc.Balances,
+		"nonces":   bc.Nonces,
+		"seedTransaction": map[string]interface{}{
+			"id":      string(seedTx.ID),
+			"from":    seedTx.From,
+			"to":      seedTx.To,
+			"amount":  seedTx.Amount,
+			"nonce":   seedTx.Nonce,
+			"fee":     seedTx.Fee,
+			"payload": string(seedTx.Payload),
+			"sig":     fmt.Sprintf("%x", seedTx.Sig),
+		},
+		"lastBlockHash": fmt.Sprintf("%x", bc.GetLastBlock().Hash),
+		"blockHeight":   len(bc.Blocks),
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+func (n *Node) handleDashboard(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	bc := n.Blockchain
+	if bc == nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	last := bc.GetLastBlock()
+	var lastHash string
+	if last != nil {
+		lastHash = fmt.Sprintf("%x", last.Hash)
+	}
+	recent := []map[string]interface{}{}
+	max := 5
+	for i := len(bc.Blocks) - 1; i >= 0 && len(recent) < max; i-- {
+		b := bc.Blocks[i]
+		for _, tx := range b.Transactions {
+			recent = append(recent, map[string]interface{}{
+				"id":      string(tx.ID),
+				"from":    tx.From,
+				"to":      tx.To,
+				"amount":  tx.Amount,
+				"nonce":   tx.Nonce,
+				"payload": string(tx.Payload),
+			})
+		}
+	}
+	walletCount := len(bc.PubKeys)
+	validatorCount := len(bc.ValidatorSet.GetValidators())
+
+	payload := map[string]interface{}{
+		"blockHeight":        len(bc.Blocks),
+		"totalSupply":        bc.GetTotalSupply(),
+		"lastBlockHash":      lastHash,
+		"walletCount":        walletCount,
+		"validatorCount":     validatorCount,
+		"recentTransactions": recent,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(payload)
+}
+
+func (n *Node) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	status := map[string]interface{}{
+		"uptime":      "unknown",
+		"version":     "1.0.0",
+		"blockHeight": len(n.Blockchain.Blocks),
+		"status":      "ok",
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(status)
+}
+
+func (n *Node) handleGetBlockByHash(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	parts := strings.Split(r.URL.Path, "/")
+	if len(parts) < 3 {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid path"})
+		return
+	}
+	hashOrKeyword := parts[len(parts)-1]
+	if hashOrKeyword == "latest" {
+		last := n.Blockchain.GetLastBlock()
+		if last == nil {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]string{"error": "no blocks"})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(last)
+		return
+	}
+	hashHex := hashOrKeyword
+	for _, b := range n.Blockchain.Blocks {
+		if fmt.Sprintf("%x", b.Hash) == hashHex {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(b)
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNotFound)
+	json.NewEncoder(w).Encode(map[string]string{"error": "block not found"})
+}
+
+func (n *Node) handleAddRawTransaction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var tx core.Transaction
+	if err := json.NewDecoder(r.Body).Decode(&tx); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	if err := n.Mempool.Add(&tx); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]string{"status": "transaction added"})
 }
 
 func NewNode() (*Node, error) {
@@ -201,33 +415,48 @@ func (n *Node) handleUnregisterValidator(w http.ResponseWriter, r *http.Request)
 }
 
 func (n *Node) handleCreateWallet(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
+	switch r.Method {
+	case http.MethodPost:
+		newWallet, err := wallet.NewWallet()
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			log.Error().Err(err).Msg("Falha ao criar nova carteira")
+			return
+		}
+
+		address := newWallet.GetAddress()
+		if n.Blockchain != nil {
+			n.Blockchain.AddPublicKey(address, newWallet.PublicKey)
+		}
+		log.Info().Str("address", address).Msg("Nova carteira criada")
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]string{
+			"address": address,
+			"status":  "wallet created",
+		})
+	case http.MethodGet:
+		if n.Blockchain == nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		entries := []map[string]interface{}{}
+		for addr, pub := range n.Blockchain.PubKeys {
+			bal := n.Blockchain.Balances[addr]
+			nonce := n.Blockchain.Nonces[addr]
+			entries = append(entries, map[string]interface{}{
+				"address":   addr,
+				"balance":   bal,
+				"nonce":     nonce,
+				"publicKey": fmt.Sprintf("0x%x", pub),
+			})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"wallets": entries})
+	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
 	}
-
-	newWallet, err := wallet.NewWallet()
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		log.Error().Err(err).Msg("Falha ao criar nova carteira")
-		return
-	}
-
-	address := newWallet.GetAddress()
-	if n.Blockchain != nil {
-		n.Blockchain.AddPublicKey(address, newWallet.PublicKey)
-	}
-	if n.Blockchain != nil {
-		n.Blockchain.AddPublicKey(address, newWallet.PublicKey)
-	}
-	log.Info().Str("address", address).Msg("Nova carteira criada")
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{
-		"address": address,
-		"status":  "wallet created",
-	})
 }
 
 func (n *Node) handleGetBalance(w http.ResponseWriter, r *http.Request) {

@@ -9,14 +9,14 @@ import (
 )
 
 type Transaction struct {
-	ID      []byte
-	From    string
-	To      string
-	Amount  int64
-	Nonce   uint64
-	Fee     int64
-	Payload []byte
-	Sig     []byte
+	ID      []byte `json:"id"`
+	From    string `json:"from"`
+	To      string `json:"to"`
+	Amount  int64  `json:"amount"`
+	Nonce   uint64 `json:"nonce"`
+	Fee     int64  `json:"fee"`
+	Payload []byte `json:"payload"`
+	Sig     []byte `json:"sig"`
 }
 
 func (tx *Transaction) HashTx() []byte {
@@ -127,11 +127,11 @@ func uint64FromBytes(b []byte) uint64 {
 }
 
 type Block struct {
-	Timestamp     int64
-	Transactions  []*Transaction
-	PrevBlockHash []byte
-	Hash          []byte
-	Validator     string
+	Timestamp     int64          `json:"timestamp"`
+	Transactions  []*Transaction `json:"transactions"`
+	PrevBlockHash []byte         `json:"prevBlockHash"`
+	Hash          []byte         `json:"hash"`
+	Validator     string         `json:"validator"`
 }
 
 func (b *Block) CalculateHash() []byte {
